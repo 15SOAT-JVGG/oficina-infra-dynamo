@@ -1,0 +1,45 @@
+name: Terraform
+on:
+  pull_request:
+  push:
+    branches: [main, homolog, production]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        required: true
+        options: [homolog, production]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.10.5 }
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+  plan:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TARGET_ENV: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.10.5 }
+      - name: Verificar configuração
+        run: test -n "$TF_STATE_BUCKET" && test -n "$AWS_ACCESS_KEY_ID" && test -n "$AWS_SECRET_ACCESS_KEY"
+      - name: Inicializar estado
+        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=oficina-infra-dynamo/$TARGET_ENV/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+      - name: Planejar
+        run: terraform plan -input=false -lock-timeout=60s -var-file="envs/$TARGET_ENV.tfvars" -var="aws_region=$AWS_REGION" -no-color
